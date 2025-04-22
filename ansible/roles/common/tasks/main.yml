@@ -1,0 +1,86 @@
+- name: Kill any running apt or dpkg processes
+  shell: |
+    for pid in $(pgrep -f 'apt|dpkg'); do
+      echo "Killing process $pid"
+      sudo kill -9 $pid
+    done
+  args:
+    executable: /bin/bash
+  ignore_errors: yes
+
+- name: Wait for dpkg lock to be released
+  shell: |
+    retries=12
+    count=0
+    while sudo fuser /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock >/dev/null 2>&1; do
+      echo "Waiting for dpkg lock..."
+      sleep 5
+      count=$((count + 1))
+      if [ "$count" -ge "$retries" ]; then
+        echo "Timeout waiting for dpkg lock, force unlocking..."
+        sudo rm -f /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock
+        sudo dpkg --configure -a
+        exit 0
+      fi
+    done
+  args:
+    executable: /bin/bash
+
+- name: Disable unattended-upgrades
+  systemd:
+    name: unattended-upgrades
+    state: stopped
+    enabled: no
+
+- name: Update and upgrade apt packages
+  apt:
+    update_cache: yes
+    upgrade: yes
+  retries: 5
+  delay: 10
+  register: result
+  until: result is succeeded
+
+- name: Install necessary packages
+  apt:
+    name:
+      - curl
+      - git
+      - nginx
+      - nodejs
+      - npm
+    state: present
+
+- name: Install dependencies for managing Node.js versions
+  apt:
+    name:
+      - curl
+      - gnupg
+    state: present
+    update_cache: yes
+
+- name: Add NodeSource repository for Node.js 22
+  shell: |
+    curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+  args:
+    executable: /bin/bash
+
+- name: Install Node.js 22 and npm
+  apt:
+    name:
+      - nodejs
+    state: present
+
+- name: Verify Node.js installation
+  command: node -v
+  register: node_version
+  changed_when: false
+
+- name: Print Node.js version
+  debug:
+    msg: "Node.js version installed: {{ node_version.stdout }}"
+
+- name: Install PM2 globally
+  npm:
+    name: pm2
+    global: yes
