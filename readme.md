@@ -26,3 +26,6 @@ terraform apply -auto-approve
 # AVISO IMPORTANTE
 
 Si ocurre un error y rechaza la conexión por ssh, esperar un momento y volver a ejecutar terraform apply.
+
+
+![alt text](arch.jpeg)

@@ -1,1 +1,1 @@
-do_token = "do_key"
+do_token = "do_token"
