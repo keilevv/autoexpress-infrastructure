@@ -1,6 +1,0 @@
-- hosts: droplets
-  become: yes
-  roles:
-    - common
-    - backend
-    - frontend
