@@ -12,6 +12,7 @@ This repository contains the infrastructure as code for deploying the AutoExpres
   - DigitalOcean Load Balancer for backend traffic
   - VPC for network isolation
 
+![alt text](arch.jpg)
 ## Prerequisites
 
 1. [Terraform](https://www.terraform.io/downloads.html) (v1.0+)
