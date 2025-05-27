@@ -1,0 +1,49 @@
+---
+- name: Create app directory
+  file:
+    path: /opt/mongodb
+    state: directory
+    mode: '0755'
+
+- name: Copy Docker Compose file
+  template:
+    src: docker-compose.yml.j2
+    dest: /opt/mongodb/docker-compose.yml
+    mode: '0644'
+
+- name: Ensure Docker network exists
+  community.docker.docker_network:
+    name: app-network
+    state: present
+
+- name: Pull MongoDB image
+  community.docker.docker_image:
+    name: mongo:latest
+    source: pull
+    force_source: yes
+    state: present
+
+- name: Ensure MongoDB container is running
+  community.docker.docker_container:
+    name: mongodb
+    image: mongo:latest
+    state: started
+    restart_policy: always
+    pull: no
+    env:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: admin123
+      MONGO_INITDB_DATABASE: autoexpress
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    networks:
+      - name: app-network
+    docker_host: unix://var/run/docker.sock
+
+- name: Wait for MongoDB to be ready
+  wait_for:
+    port: 27017
+    delay: 10
+    timeout: 60

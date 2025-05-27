@@ -1,0 +1,108 @@
+---
+- name: Create app directory
+  file:
+    path: /opt/frontend
+    state: directory
+    mode: '0755'
+
+- name: Clone frontend repository
+  git:
+    repo: https://github.com/keilevv/autoexpress-client.git
+    dest: /opt/frontend
+    version: main
+    force: yes
+
+- name: Create environment file
+  template:
+    src: ../../../../templates/frontend/.env.j2
+    dest: /opt/frontend/.env
+    mode: '0644'
+  vars:
+    load_balancer_ip: "{{ hostvars[groups['load_balancer'][0]]['ip'] }}"
+  notify: restart frontend
+
+- name: Copy Dockerfile
+  template:
+    src: Dockerfile.j2
+    dest: /opt/frontend/Dockerfile
+    mode: '0644'
+
+- name: Get load balancer IP
+  set_fact:
+    load_balancer_ip: "{{ hostvars[groups['backend'][0]]['ansible_host'] | default(groups['backend'][0]) }}"
+
+- name: Copy nginx config
+  template:
+    src: nginx.conf.j2
+    dest: /opt/frontend/nginx.conf
+    mode: '0644'
+  vars:
+    load_balancer_ip: "{{ load_balancer_ip }}"
+
+- name: Build frontend Docker image
+  community.docker.docker_image:
+    name: frontend
+    source: build
+    build:
+      path: /opt/frontend
+      dockerfile: /opt/frontend/Dockerfile
+    force_source: yes
+    state: present
+
+- name: Ensure Docker network exists
+  community.docker.docker_network:
+    name: app-network
+    state: present
+  register: network_result
+  retries: 3
+  delay: 5
+  until: network_result is not failed
+  ignore_errors: yes
+
+- name: Remove existing frontend container if it exists
+  community.docker.docker_container:
+    name: frontend
+    state: absent
+  ignore_errors: yes
+  register: container_removed
+
+- name: Remove existing frontend image if it exists
+  community.docker.docker_image:
+    name: frontend
+    state: absent
+  ignore_errors: yes
+  register: image_removed
+
+- name: Build frontend Docker image
+  community.docker.docker_image:
+    name: frontend
+    source: build
+    build:
+      path: /opt/frontend
+- name: Ensure frontend container is running
+  community.docker.docker_container:
+    name: frontend
+    image: "frontend:latest"
+    state: started
+    restart_policy: always
+    ports:
+      - "80:80"
+    networks:
+      - name: app-network
+    docker_host: unix://var/run/docker.sock
+  register: container_status
+  retries: 5
+  delay: 5
+  until: container_status is succeeded
+  ignore_errors: yes
+
+- name: Debug frontend container status
+  debug:
+    var: container_status
+  when: container_status is failed
+
+- name: Wait for frontend to be ready
+  wait_for:
+    port: 80
+    delay: 10
+    timeout: 60

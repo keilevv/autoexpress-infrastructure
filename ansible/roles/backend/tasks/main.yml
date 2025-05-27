@@ -1,0 +1,124 @@
+---
+- name: Create app directory
+  file:
+    path: /opt/backend
+    state: directory
+    mode: '0755'
+
+- name: Clone backend repository
+  git:
+    repo: https://github.com/keilevv/autoexpress-server.git
+    dest: /opt/backend
+    version: main
+    force: yes
+
+- name: Copy Dockerfile
+  template:
+    src: Dockerfile.j2
+    dest: /opt/backend/Dockerfile
+    mode: '0644'
+
+- name: Get MongoDB private IP
+  set_fact:
+    mongodb_private_ip: "{{ hostvars[groups['db'][0]]['ansible_host'] | default(groups['db'][0]) }}"
+
+- name: Copy docker-compose file
+  template:
+    src: docker-compose.yml.j2
+    dest: /opt/backend/docker-compose.yml
+    mode: '0644'
+  vars:
+    mongodb_private_ip: "{{ mongodb_private_ip }}"
+
+- name: Ensure Dockerfile exists
+  template:
+    src: Dockerfile.j2
+    dest: /opt/backend/Dockerfile
+    mode: '0644'
+
+- name: Remove existing backend container if it exists
+  community.docker.docker_container:
+    name: backend
+    state: absent
+  ignore_errors: yes
+
+- name: Remove existing backend image if it exists
+  community.docker.docker_image:
+    name: backend
+    state: absent
+  ignore_errors: yes
+
+- name: Build backend Docker image
+  community.docker.docker_image:
+    name: backend
+    source: build
+    build:
+      path: /opt/backend
+      dockerfile: /opt/backend/Dockerfile
+    force_source: yes
+    state: present
+
+- name: Ensure Docker network exists
+  community.docker.docker_network:
+    name: app-network
+    state: present
+  register: network_result
+  retries: 3
+  delay: 5
+  until: network_result is not failed
+  ignore_errors: yes
+
+- name: Remove existing backend container if it exists
+  community.docker.docker_container:
+    name: backend
+    state: absent
+  ignore_errors: yes
+  register: container_removed
+
+- name: Remove existing backend image if it exists
+  community.docker.docker_image:
+    name: backend
+    state: absent
+  ignore_errors: yes
+  register: image_removed
+
+- name: Build backend Docker image
+  community.docker.docker_image:
+    name: backend
+    source: build
+    build:
+      path: /opt/backend
+      dockerfile: /opt/backend/Dockerfile
+    force_source: yes
+    state: present
+  register: build_result
+  retries: 2
+  delay: 10
+  until: build_result is not failed
+
+- name: Ensure backend container is running
+  community.docker.docker_container:
+    name: backend
+    image: "backend:latest"
+    state: started
+    restart_policy: always
+    pull: no
+    env:
+      NODE_ENV: production
+      PORT: "5000"
+      MONGODB_URI: "mongodb://admin:admin123@{{ mongodb_private_ip }}:27017/autoexpress?authSource=admin&retryWrites=true&w=majority"
+    ports:
+      - "5000:5000"
+    networks:
+      - name: app-network
+    docker_host: unix://var/run/docker.sock
+  register: container_status
+  retries: 3
+  delay: 5
+  until: container_status is not failed
+
+- name: Wait for backend to be ready
+  wait_for:
+    port: 5000
+    delay: 10
+    timeout: 60

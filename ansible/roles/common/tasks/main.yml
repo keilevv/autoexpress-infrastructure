@@ -1,0 +1,301 @@
+---
+- name: Kill any stuck package manager processes
+  command: pkill -9 -f 'apt|dpkg|apt-get|apt-cache|unattended-upgrade'
+  register: kill_result
+  ignore_errors: yes
+  changed_when: false
+  async: 30
+  poll: 0
+
+- name: Remove package manager locks
+  file:
+    path: "{{ item }}"
+    state: absent
+  with_items:
+    - /var/lib/apt/lists/lock
+    - /var/cache/apt/archives/lock
+    - /var/lib/dpkg/lock
+    - /var/lib/dpkg/lock-frontend
+  ignore_errors: yes
+  changed_when: false
+
+- name: Fix broken packages
+  apt:
+    update_cache: yes
+    autoclean: yes
+    autoremove: yes
+  register: apt_fix
+  retries: 3
+  delay: 5
+  until: apt_fix is succeeded
+  ignore_errors: yes
+
+- name: Configure dpkg to automatically fix missing dependencies
+  shell: |
+    dpkg --configure -a
+    apt-get install -f -y
+  args:
+    warn: no
+  register: dpkg_configure
+  changed_when: false
+  ignore_errors: yes
+
+- name: Wait for package manager to be available
+  block:
+    - name: Check if apt is running
+      command: fuser /var/lib/dpkg/lock /var/lib/apt/lists/lock /var/cache/apt/archives/lock /var/lib/dpkg/lock-frontend
+      register: apt_running
+      ignore_errors: yes
+      changed_when: false
+
+    - name: Wait for apt to be available
+      command: sleep 5
+      when: apt_running.rc == 0
+      register: wait_result
+      until: wait_result.rc == 0
+      retries: 12
+      delay: 5
+      ignore_errors: true
+
+- name: Remove existing Docker configuration
+  file:
+    path: "{{ item }}"
+    state: absent
+  with_items:
+    - /etc/apt/sources.list.d/docker.list
+    - /usr/share/keyrings/docker-archive-keyring.gpg
+  ignore_errors: yes
+  changed_when: false
+
+- name: Remove Docker packages if present
+  apt:
+    name: "{{ item }}"
+    state: absent
+  with_items:
+    - docker-ce
+    - docker-ce-cli
+    - containerd.io
+  ignore_errors: yes
+  changed_when: false
+
+- name: Clean apt cache and remove unused packages
+  apt:
+    autoclean: yes
+    autoremove: yes
+  ignore_errors: yes
+  changed_when: false
+
+- name: Update apt cache
+  apt:
+    update_cache: yes
+    cache_valid_time: 3600
+
+- name: Fix dpkg issues (attempt 1)
+  shell: |
+    dpkg --configure -a
+    apt-get install -f -y
+  args:
+    warn: no
+  register: dpkg_fix_1
+  ignore_errors: yes
+
+- name: Debug dpkg fix attempt 1
+  debug:
+    var: dpkg_fix_1
+  when: dpkg_fix_1 is failed
+
+- name: Fix dpkg issues (attempt 2)
+  shell: |
+    apt-get update
+    apt-get clean
+    apt-get autoclean
+    apt-get autoremove -y
+    apt-get update
+    apt-get install -f -y
+  args:
+    warn: no
+  register: dpkg_fix_2
+  when: dpkg_fix_1 is failed
+  ignore_errors: yes
+
+- name: Debug dpkg fix attempt 2
+  debug:
+    var: dpkg_fix_2
+  when: dpkg_fix_2 is failed
+
+- name: Fix dpkg issues (attempt 3)
+  shell: |
+    rm -f /var/lib/dpkg/lock*
+    rm -f /var/cache/apt/archives/lock
+    dpkg --configure -a
+    apt-get update
+    apt-get install -f -y
+  args:
+    warn: no
+  register: dpkg_fix_3
+  when: dpkg_fix_2 is failed
+  ignore_errors: yes
+
+- name: Debug dpkg fix attempt 3
+  debug:
+    var: dpkg_fix_3
+  when: dpkg_fix_3 is failed
+
+- name: Install prerequisites
+  apt:
+    name: "{{ item }}"
+    state: present
+  with_items:
+    - apt-transport-https
+    - ca-certificates
+    - curl
+    - gnupg
+    - software-properties-common
+  register: prerequisites_install
+  retries: 3
+  delay: 5
+  until: prerequisites_install is succeeded
+  ignore_errors: yes
+
+- name: Debug prerequisites installation
+  debug:
+    var: prerequisites_install
+  when: prerequisites_install is failed
+
+- name: Create Docker keyring directory
+  file:
+    path: /usr/share/keyrings
+    state: directory
+    mode: '0755'
+
+- name: Download Docker GPG key
+  get_url:
+    url: https://download.docker.com/linux/ubuntu/gpg
+    dest: /tmp/docker.gpg
+    mode: '0644'
+
+- name: Import Docker GPG key
+  shell: |
+    gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg /tmp/docker.gpg
+    rm -f /tmp/docker.gpg
+  register: gpg_result
+  retries: 3
+  delay: 5
+  until: gpg_result is succeeded
+  ignore_errors: yes
+
+- name: Verify GPG key installation
+  stat:
+    path: /usr/share/keyrings/docker-archive-keyring.gpg
+  register: keyring_check
+  retries: 3
+  delay: 5
+  until: keyring_check.stat.exists
+
+- name: Add Docker repository
+  apt_repository:
+    repo: "deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
+    state: present
+    update_cache: yes
+    mode: '0644'
+  register: docker_repo
+  retries: 3
+  delay: 5
+  until: docker_repo is succeeded
+
+- name: Install Docker packages
+  apt:
+    name: "{{ item }}"
+    state: present
+  with_items:
+    - docker-ce
+    - docker-ce-cli
+    - containerd.io
+  register: docker_install
+  retries: 3
+  delay: 5
+  until: docker_install is succeeded
+
+- name: Wait for Docker service to be available
+  wait_for:
+    path: /var/run/docker.sock
+    timeout: 30
+  retries: 3
+  delay: 5
+  register: docker_wait
+  until: docker_wait is succeeded
+
+- name: Verify Docker is running
+  command: docker --version
+  register: docker_version
+  retries: 3
+  delay: 5
+  until: docker_version is succeeded
+
+- name: Create /etc/docker directory
+  file:
+    path: /etc/docker
+    state: directory
+    mode: '0755'
+
+- name: Configure Docker daemon
+  copy:
+    dest: /etc/docker/daemon.json
+    content: |
+      {
+        "log-driver": "json-file",
+        "log-opts": {
+          "max-size": "10m",
+          "max-file": "3"
+        },
+        "storage-driver": "overlay2"
+      }
+    mode: '0644'
+  notify: restart docker
+  register: docker_daemon_config
+
+- name: Force restart docker if config changed
+  systemd:
+    name: docker
+    state: restarted
+    enabled: yes
+    daemon_reload: yes
+  when: docker_daemon_config is changed
+
+- name: Add current user to docker group
+  user:
+    name: root
+    groups: docker
+    append: yes
+
+- name: Ensure Docker socket directory exists
+  file:
+    path: /var/run
+    state: directory
+    mode: '0755'
+
+- name: Ensure Docker socket has correct permissions
+  file:
+    path: /var/run/docker.sock
+    state: touch
+    owner: root
+    group: docker
+    mode: '0660'
+
+- name: Start and enable Docker service
+  systemd:
+    name: docker
+    state: started
+    enabled: yes
+    daemon_reload: yes
+
+- name: Verify Docker is running
+  command: docker info
+  register: docker_info
+  changed_when: false
+  failed_when: false
+
+- name: Debug Docker info
+  debug:
+    var: docker_info.stderr_lines
+  when: docker_info.rc != 0

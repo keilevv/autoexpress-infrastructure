@@ -1,0 +1,24 @@
+---
+- name: Common setup for all servers
+  hosts: all
+  become: true
+  roles:
+    - common
+
+- name: Deploy MongoDB
+  hosts: db
+  become: true
+  roles:
+    - mongodb
+
+- name: Deploy Backend
+  hosts: backend
+  become: true
+  roles:
+    - backend
+
+- name: Deploy Frontend
+  hosts: frontend
+  become: true
+  roles:
+    - frontend

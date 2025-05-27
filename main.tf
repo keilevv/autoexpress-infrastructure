@@ -66,13 +66,13 @@ resource "digitalocean_loadbalancer" "public" {
   droplet_ids = digitalocean_droplet.backend.*.id
 }
 
+output "load_balancer_ip" {
+  value = digitalocean_loadbalancer.public.ip
+}
+
 # Outputs
 output "frontend_ip" {
   value = digitalocean_droplet.frontend.ipv4_address
-}
-
-output "load_balancer_ip" {
-  value = digitalocean_loadbalancer.public.ip
 }
 
 output "backend_ips" {
@@ -81,4 +81,44 @@ output "backend_ips" {
 
 output "mongodb_ip" {
   value = digitalocean_droplet.mongodb.ipv4_address_private
+}
+
+# Generate Ansible inventory file
+resource "local_file" "ansible_inventory" {
+  content = templatefile("${path.module}/ansible/inventory.tpl", {
+    frontend_ip     = digitalocean_droplet.frontend.ipv4_address
+    backend_ips     = digitalocean_droplet.backend[*].ipv4_address
+    mongodb_ip      = digitalocean_droplet.mongodb.ipv4_address
+  })
+  filename = "${path.module}/ansible/inventory.ini"
+}
+
+# Run Ansible playbook
+resource "null_resource" "ansible_provisioner" {
+  depends_on = [
+    digitalocean_droplet.frontend,
+    digitalocean_droplet.backend,
+    digitalocean_droplet.mongodb,
+    local_file.ansible_inventory
+  ]
+
+  # Install Ansible and required collections
+  provisioner "local-exec" {
+    command = <<EOT
+      python3 -m pip install --user ansible
+      ansible-galaxy collection install -r ${path.module}/ansible/requirements.yml
+    EOT
+  }
+
+  # Run Ansible playbook
+  provisioner "local-exec" {
+    command = <<EOT
+      cd ${path.module}/ansible
+      ansible-playbook -i inventory.ini site.yml
+    EOT
+  }
+
+  triggers = {
+    always_run = "${timestamp()}" # Always run this provisioner
+  }
 }
