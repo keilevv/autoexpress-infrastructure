@@ -1,0 +1,24 @@
+#cloud-config
+package_update: true
+package_upgrade: true
+
+packages:
+  - nodejs
+  - npm
+  - git
+
+runcmd:
+  - curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+  - apt-get install -y nodejs
+  - npm install -g pm2
+  - git clone https://github.com/keilevv/autoexpress-server.git /var/www/autoexpress-server
+  - cd /var/www/autoexpress-server
+  - echo 'DATABASE_URI="mongodb://${mongodb_ip}:27017/autoexpressDev"
+HOST="0.0.0.0"
+PORT=5000
+NODE_ENV=production' > .env
+  - npm install
+  - pm2 start npm --name "autoexpress-server" -- start
+  - pm2 save
+  - pm2 startup
+  - env PATH=$PATH:/usr/bin pm2 startup -u root --hp /root

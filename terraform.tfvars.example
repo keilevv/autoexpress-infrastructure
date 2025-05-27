@@ -1,9 +1,9 @@
 # DigitalOcean API token
-do_token = "do_token"
+do_token = "your_do_token_here"
 
 # List of SSH key fingerprints to add to droplets
 ssh_keys = [
-  "ley-fingerprint"
+  "your_ssh_key_fingerprint_here"
 ]
 
 # Optional: Change region if needed
